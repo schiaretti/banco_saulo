@@ -1,123 +1,169 @@
-import express from 'express'
-import { PrismaClient } from '@prisma/client'
-import bcrypt from 'bcrypt'
+import express from 'express';
+import bcrypt from 'bcrypt';
+import User from './model/UserModel.js'; // Importando o modelo de usuário
 
-const router = express.Router()
-const prisma = new PrismaClient()
+const router = express.Router();
 
-
-/*rota de criar*/
+/* Rota de criar usuário */
 router.post('/cadastro', async (req, res) => {
-
     try {
-        const usuario = req.body
+        let { nome, email, senha } = req.body;
 
-        const salt = await bcrypt.genSalt(10)
-        const hashsenha = await bcrypt.hash(usuario.senha, salt)
+        // Removendo espaços extras
+        nome = nome?.trim();
+        email = email?.trim();
+        senha = senha?.trim();
 
-        await prisma.usuario.create({
+        // Verificando se todos os campos foram fornecidos
+        if (!nome || !email || !senha) {
+            return res.status(400).json({ message: 'Todos os campos são obrigatórios!' });
+        }
 
-            data: {
-                email: usuario.email,
-                nome: usuario.nome,
-                senha: hashsenha,
-            },
-        })
-        res.status(201).json(usuario)
+        // Verificando se o email já existe no banco de dados
+        const usuarioExistente = await User.findOne({ email });
+        if (usuarioExistente) {
+            return res.status(400).json({ message: 'Email já está em uso!' });
+        }
+
+        // Gerando o hash da senha
+        const salt = await bcrypt.genSalt(10);
+        const hashsenha = await bcrypt.hash(senha, salt);
+
+        // Criando novo usuário
+        const novoUsuario = new User({ nome, email, senha: hashsenha });
+
+        // Salvando no banco de dados
+        await novoUsuario.save();
+
+        res.status(201).json({ message: 'Usuário cadastrado com sucesso!' });
+
     } catch (error) {
-        res.status(500).json({ message: "Erro no servidor tente novamente!" })
+        console.error(error);
+        res.status(500).json({ message: 'Erro no servidor, tente novamente!' });
     }
+});
 
-})
-
-/*rota de editar usuarios*/
+/* Rota de editar usuário */
 router.put('/usuarios/:id', async (req, res) => {
-    const id = Number(req.params.id); // Convertendo o ID para número
-
-    if (isNaN(id)) {
-        return res.status(400).json({ error: "ID inválido, deve ser um número" });
-    }
+    const { id } = req.params;
+    let { nome, email, senha } = req.body;
 
     try {
-        const usuarioAtualizado = await prisma.usuario.update({
-            where: { id: id },
-            data: {
-                email: req.body.email,
-                nome: req.body.nome,
-                senha: req.body.senha
-            }
-        });
+        // Verifica se o ID é válido
+        if (!id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(400).json({ error: 'ID inválido' });
+        }
+
+        // Removendo espaços extras
+        nome = nome?.trim();
+        email = email?.trim();
+        senha = senha?.trim();
+
+        // Verifica se ao menos um campo foi enviado para atualização
+        if (!nome && !email && !senha) {
+            return res.status(400).json({ error: 'Informe ao menos um campo para atualizar' });
+        }
+
+        // Criptografar nova senha, se fornecida
+        let hashSenha = undefined;
+        if (senha) {
+            const salt = await bcrypt.genSalt(10);
+            hashSenha = await bcrypt.hash(senha, salt);
+        }
+
+        // Atualizar usuário no banco de dados
+        const usuarioAtualizado = await User.findByIdAndUpdate(
+            id,
+            { nome, email, ...(hashSenha && { senha: hashSenha }) }, // Atualiza a senha somente se foi fornecida
+            { new: true, select: '-senha' } // Retorna o documento atualizado SEM a senha
+        );
+
+        if (!usuarioAtualizado) {
+            return res.status(404).json({ error: 'Usuário não encontrado' });
+        }
 
         res.status(200).json(usuarioAtualizado);
 
     } catch (error) {
-        res.status(500).json({ error: "Erro ao atualizar usuário" });
+        console.error(error);
+        res.status(500).json({ error: 'Erro ao atualizar usuário' });
     }
 });
 
-/* rota de listar usuarios */
+/* Rota para listar usuários */
 router.get('/listar-usuarios', async (req, res) => {
-
     try {
+        const usuarios = await User.find({}, '-senha'); // Exclui o campo "senha" da resposta
 
-        const usuarios = await prisma.usuario.findMany()
-
-        res.status(200).json({ message: 'Usuários listados com sucesso!', usuarios })
-
-    } catch (error) {
-        res.status(500).json({ message: "Erro no servidor tente novamente!" })
-    }
-
-})
-
-/*rota de deletar */
-
-router.delete('/usuarios/:id', async (req, res) => {
-    const id = Number(req.params.id); // Convertendo o ID para número
-
-    if (isNaN(id)) {
-        return res.status(400).json({ error: "ID inválido, deve ser um número" });
-    }
-
-    try {
-        await prisma.usuario.delete({
-            where: { id: id }
+        res.status(200).json({
+            message: 'Usuários listados com sucesso!',
+            usuarios
         });
 
-        res.status(200).json({ message: "Usuário deletado com sucesso!" });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Erro no servidor, tente novamente!' });
+    }
+});
+
+/* Rota para deletar usuário */
+router.delete('/usuarios/:id', async (req, res) => {
+    const { id } = req.params;
+
+    if (!id.match(/^[0-9a-fA-F]{24}$/)) { // Verifica se o ID é válido para o MongoDB
+        return res.status(400).json({ error: 'ID inválido' });
+    }
+
+    try {
+        const usuarioDeletado = await User.findByIdAndDelete(id);
+
+        if (!usuarioDeletado) {
+            return res.status(404).json({ error: 'Usuário não encontrado' });
+        }
+
+        res.status(200).json({ message: 'Usuário deletado com sucesso!' });
 
     } catch (error) {
-        res.status(500).json({ error: "Erro ao deletar usuário" });
+        console.error(error);
+        res.status(500).json({ error: 'Erro ao deletar usuário' });
     }
 });
 
 
-
+/* Rota de login */
 router.post('/login', async (req, res) => {
-
     try {
-        const usuarioInfo = req.body
+        const { email, senha } = req.body;
 
-       
-        const usuario = await prisma.usuario.findUnique({ where: { email: usuarioInfo.email } })
+        if (!email || !senha) {
+            return res.status(400).json({ message: "Email e senha são obrigatórios!" });
+        }
+
+        // Busca usuário pelo e-mail
+        const usuario = await User.findOne({ email });
         if (!usuario) {
-            return res.status(404).json({ message: "Usuário não encontrado!" })
+            return res.status(404).json({ message: "Usuário não encontrado!" });
         }
-        const isMatch = await bcrypt.compare(usuarioInfo.senha, usuario.senha)
+
+        // Verifica se a senha está correta
+        const isMatch = await bcrypt.compare(senha, usuario.senha);
         if (!isMatch) {
-            return res.status(400).json({ message: "Senha inválida!" })
+            return res.status(400).json({ message: "Senha inválida!" });
         }
-        
-       
+
+        res.status(200).json({ 
+            message: "Login bem-sucedido!", 
+            usuario: { id: usuario._id, nome: usuario.nome, email: usuario.email }
+        });
 
     } catch (error) {
-        res.status(500).json({ message: "Erro no servidor tente novamente!" })
+        res.status(500).json({ message: "Erro no servidor, tente novamente!" });
     }
+});
 
-})
 
 /*rota de criar clientes*/
-router.post('/cadastro-clientes', async (req, res) => {
+/*router.post('/cadastro-clientes', async (req, res) => {
 
     try {
         const cliente = req.body
@@ -141,7 +187,7 @@ router.post('/cadastro-clientes', async (req, res) => {
 })
 
 /* rota de listar clientes */
-router.get('/listar-clientes', async (req, res) => {
+/*router.get('/listar-clientes', async (req, res) => {
 
     try {
 
@@ -156,7 +202,7 @@ router.get('/listar-clientes', async (req, res) => {
 })
 
 /*rota de editar clientes*/
-router.put('/clientes/:id', async (req, res) => {
+/*router.put('/clientes/:id', async (req, res) => {
     const id = Number(req.params.id); // Convertendo o ID para número
 
     if (isNaN(id)) {
@@ -185,7 +231,7 @@ router.put('/clientes/:id', async (req, res) => {
 
 /*rota de deletar */
 
-router.delete('/clientes/:id', async (req, res) => {
+/*router.delete('/clientes/:id', async (req, res) => {
     const id = Number(req.params.id); // Convertendo o ID para número
 
     if (isNaN(id)) {
@@ -205,7 +251,7 @@ router.delete('/clientes/:id', async (req, res) => {
 });
 
 /*rota de salvar fretes*/
-router.post('/logistica', async (req, res) => {
+/*router.post('/logistica', async (req, res) => {
 
     try {
         const fretes = req.body
@@ -234,7 +280,7 @@ router.post('/logistica', async (req, res) => {
 })
 
 /* rota de listar fretes */
-router.get('/listar-fretes', async (req, res) => {
+/*router.get('/listar-fretes', async (req, res) => {
 
     try {
 
@@ -249,7 +295,7 @@ router.get('/listar-fretes', async (req, res) => {
 })
 
 /*rota de editar clientes*/
-router.put('/logistica/:id', async (req, res) => {
+/*router.put('/logistica/:id', async (req, res) => {
     const id = Number(req.params.id); // Convertendo o ID para número
 
     if (isNaN(id)) {
@@ -281,7 +327,7 @@ router.put('/logistica/:id', async (req, res) => {
 
 /*rota de deletar */
 
-router.delete('/logistica/:id', async (req, res) => {
+/*router.delete('/logistica/:id', async (req, res) => {
     const id = Number(req.params.id); // Convertendo o ID para número
 
     if (isNaN(id)) {
@@ -298,7 +344,7 @@ router.delete('/logistica/:id', async (req, res) => {
     } catch (error) {
         res.status(500).json({ error: "Erro ao deletar frete" });
     }
-});
+});*/
 
 
 
